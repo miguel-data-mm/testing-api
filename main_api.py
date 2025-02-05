@@ -164,6 +164,7 @@ def post_purcharses():
       for sale_order in content:
         id_order = sale_order["Orden_Compra"]
         df_filtered = df[(df['Orden_Compra'] == id_order)]
+        df_filtered["Ax_RecId"] = sale_order['Ax_RecId']
         df_filtered = df_filtered[["Orden_Compra", "Cliente", "Ean/Upc", "Cantidad", "Fecha", "Ax_RecId"]]
         sheet.append_rows(df_filtered.values.tolist())
 
