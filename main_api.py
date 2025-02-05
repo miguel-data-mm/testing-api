@@ -147,26 +147,29 @@ def post_purcharses():
       200:
         description: The product inserted in the database
     """
-    content = request.get_json()
-    #df = get_purcharses_server()
-    orders = []
-    for sale_order in content:
-      elem = [sale_order["Orden_Compra"], sale_order['Ax_RecId'], datetime.today().strftime("%d-%m-%Y"), datetime.now().strftime("%H:%M")]
-      #{"Orden_Compra": sale_order["Orden_Compra"], 'Ax_RecId': sale_order['Ax_RecId'], "Fecha": datetime.today().strftime("%d-%m-%Y"), "Hora": datetime.now().strftime("%H:%M")}
-      orders.append(elem)
+    try:
+      content = request.get_json()
+      #df = get_purcharses_server()
+      sheet = document.worksheet("processed_purcharses_details")
+      df = get_purcharses_server()
+      orders = []
+      for sale_order in content:
+        elem = [sale_order["Orden_Compra"], sale_order['Ax_RecId'], datetime.today().strftime("%d-%m-%Y"), datetime.now().strftime("%H:%M")]
+        #{"Orden_Compra": sale_order["Orden_Compra"], 'Ax_RecId': sale_order['Ax_RecId'], "Fecha": datetime.today().strftime("%d-%m-%Y"), "Hora": datetime.now().strftime("%H:%M")}
+        orders.append(elem)
 
-    sheet_processed = document.worksheet("processed_purcharses")
-    sheet_processed.append_rows(orders)
+      sheet_processed = document.worksheet("processed_purcharses")
+      sheet_processed.append_rows(orders)
 
-    df = get_purcharses_server()
-    id_order = sale_order["Orden_Compra"]
-    df = df[(df['Orden_Compra'] == id_order)]
-    df = df[["Orden_Compra", "Cliente", "Ean/Upc", "Cantidad", "Fecha", "Ax_RecId"]]
-    sheet = document.worksheet("processed_purcharses_details")
-    sheet.append_rows(df.values.tolist())
-    test = df.values.tolist()
-    
-    return test
+      for sale_order in content:
+        id_order = sale_order["Orden_Compra"]
+        df_filtered = df[(df['Orden_Compra'] == id_order)]
+        df_filtered = df_filtered[["Orden_Compra", "Cliente", "Ean/Upc", "Cantidad", "Fecha", "Ax_RecId"]]
+        sheet.append_rows(df_filtered.values.tolist())
+
+      return "Success"
+    except Exception as e:
+      return "Error " + str(e)
 
 # Endpoint para retornar el XML
 @app.route('/get_xml_purcharses/<date>')
