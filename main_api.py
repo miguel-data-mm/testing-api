@@ -115,7 +115,7 @@ def get_purcharses_day(date):
     """
     df = get_purcharses_server()
     df  = df[df['Ax_RecId'].isna()]
-    #df = df[(df['Fecha'] == date)]
+    df = df[(df['Fecha'] == date)]
 
     return Response(df.to_json(orient="records"), mimetype='application/json')
 
@@ -186,7 +186,7 @@ def get_xml_purcharses(date):
         description: All the purcharses
     """
     df = get_purcharses_server()
-    #df = df[(df['Fecha'] == date)]
+    df = df[(df['Fecha'] == date)]
     df = df[df['Ax_RecId'].isna()]
   
     df["Unidad"] = "PIEZA"
