@@ -1,6 +1,6 @@
 from xml.dom import minidom
-from flask import Flask, jsonify, Response, request
-from datetime import datetime, timedelta
+from flask import Flask, jsonify, Response, request, send_file
+from datetime import datetime, timedelta, timezone
 import os
 from dotenv import load_dotenv
 import pandas as pd
@@ -41,7 +41,6 @@ SPREADSHEET_ID = "1pYh0xT3-w1RCokQZkAzM2BWXo68yrGGCr86N7SSpNIM"
 client = gspread.authorize(credent)
 document = client.open_by_key(SPREADSHEET_ID)
 
-
 def get_purcharses_server():   
   try:
       ssh_conn = paramiko.Transport((hostname, 22))
@@ -50,9 +49,11 @@ def get_purcharses_server():
 
       files = sftp.listdir_attr("/45801/Send/")
       list_df = []
+
       for file in files:
+        date_file = datetime.fromtimestamp(file.st_mtime, tz=timezone.utc).strftime('%d-%m-%Y')
         if file.filename.lower().endswith("ord_compra.csv"):
-          dic = {"filename": file.filename, "date": datetime.utcfromtimestamp(file.st_mtime).strftime('%d-%m-%Y')}
+          dic = {"filename": file.filename, "date": date_file}
 
           with sftp.open(path + dic["filename"], "r") as ftp_file:
             ftp_file.prefetch()
@@ -60,7 +61,9 @@ def get_purcharses_server():
             df["Orden Compra"] = df["Orden Compra"].astype(str).str.rstrip('.0')
             df["Ean/Upc"] = df["Ean/Upc"].astype(str).str.rstrip('.0')
             df["Fecha"] = dic["date"]
+            #df[~df['Orden Compra'].isin(orders_set)]
             list_df.append(df)
+
       sftp.close()
       ssh_conn.close()
       
@@ -75,33 +78,16 @@ def get_purcharses_server():
       headers = data.pop(0)
 
       df_processed = pd.DataFrame(data, columns=headers)
-
       df_processed["Orden_Compra"] = df_processed["Orden_Compra"].astype(str)
       df_processed ["Ax_RecId"] = df_processed["Ax_RecId"].astype(str)
       full_df = pd.merge(full_df[["Orden_Compra", "Cliente", "Ean/Upc", "Cantidad", "Fecha"]], df_processed[["Orden_Compra", "Ax_RecId"]], on='Orden_Compra', how='left')  
       return full_df
-  
   except Exception as e:
     return e
 
 def last_filled_row(worksheet):
     str_list = list(filter(None, worksheet.col_values(1)))
     return len(str_list)
-
-@app.route('/get_all_purcharses', methods=['GET'])
-def get_all_purcharse():
-    """
-    Endpoint to get all the purchase orders in json format.
-    Endpoint para obtener todas las ordenes de compra en formato json.
-    ---
-    responses:
-      200:
-        description: All the purcharses
-    """
-    df = get_purcharses_server()
-
-    return Response(df.to_json(orient="records"), mimetype='application/json')
-
 
 @app.route('/get_purcharses_day/<date>', methods=['GET'])
 def get_purcharses_day(date):
@@ -129,7 +115,7 @@ def get_purcharses_day(date):
     """
     df = get_purcharses_server()
     df  = df[df['Ax_RecId'].isna()]
-    df = df[(df['Fecha'] == date)]
+    #df = df[(df['Fecha'] == date)]
 
     return Response(df.to_json(orient="records"), mimetype='application/json')
 
@@ -169,19 +155,18 @@ def post_purcharses():
       #{"Orden_Compra": sale_order["Orden_Compra"], 'Ax_RecId': sale_order['Ax_RecId'], "Fecha": datetime.today().strftime("%d-%m-%Y"), "Hora": datetime.now().strftime("%H:%M")}
       orders.append(elem)
 
-    sheet = document.worksheet("processed_purcharses")
-    sheet.append_rows(orders)
-    #sheet = sheet.update([DF.columns.values.tolist()] + DF.values.tolist())
+    sheet_processed = document.worksheet("processed_purcharses")
+    sheet_processed.append_rows(orders)
 
-    sheet_processed = document.worksheet("processed_purcharses_details")
-    data = sheet_processed.get_all_values()
-    values = [sale_order['Ax_RecId'] if e[0] == sale_order["Orden_Compra"] else e[5] for e in data]
-    cells = sheet_processed.range("F1:F%d" % len(values))
-    for i, e in enumerate(cells):
-        e.value = values[i]
-    sheet_processed.update_cells(cells)
-
-    return content
+    df = get_purcharses_server()
+    id_order = sale_order["Orden_Compra"]
+    df = df[(df['Orden_Compra'] == id_order)]
+    df = df[["Orden_Compra", "Cliente", "Ean/Upc", "Cantidad", "Fecha", "Ax_RecId"]]
+    sheet = document.worksheet("processed_purcharses_details")
+    sheet.append_rows(df.values.tolist())
+    test = df.values.tolist()
+    
+    return test
 
 # Endpoint para retornar el XML
 @app.route('/get_xml_purcharses/<date>')
@@ -201,11 +186,11 @@ def get_xml_purcharses(date):
         description: All the purcharses
     """
     df = get_purcharses_server()
+    #df = df[(df['Fecha'] == date)]
     df = df[df['Ax_RecId'].isna()]
-    df = df[(df['Fecha'] == date)]
   
     df["Unidad"] = "PIEZA"
-    df["Tamaño"] = "1"
+    df["Tamaño"] = df["Ean/Upc"].apply(lambda x: 1 if x != "7501370900233" else 0.750)
     df["Grupo de impuestos por venta de articulos"] = "BEB"
 
     df["Orden_Compra"] = df["Orden_Compra"].astype(str).str.rstrip('.0')
@@ -232,24 +217,30 @@ def get_xml_purcharses(date):
     orders_tag = ET.Element("Ordenes")
     orders_numbers = set(df["Orden_Compra"])
 
+
     for order_number in orders_numbers:
         order_tag = ET.SubElement(orders_tag, "Orden")
 
         list_ord = df_result.query(f"Orden_Compra == '{order_number}'")
         try:
-            client = list_ord["Cliente"].iloc[0]
+          client = list_ord["Cliente"].iloc[0]
+          sheet_accounts = document.worksheet("accounts")
+          data = sheet_accounts.get_all_values()
+          headers = data.pop(0)
+          df_accounts = pd.DataFrame(data, columns=headers)
+          id_account = str(df_accounts.query(f"Cliente == '{client}'")["Cuenta"].iloc[0])
         except:
-            client = None
+          id_account = None
 
         df_header = pd.DataFrame({
         'Orden_Compra': [order_number],
-        "Cliente": [client],
+        "Cliente": [id_account],
         'Sitio': ["Vitinico"], 
-        'Almacen': [""], 
+        'Almacen': ["IZTAPALAPA"], 
         'Departamento': ["deo"], 
         'Centro_de_costo': ["VEVEVEVL1"],
         'Reporte': [""], 
-        'Tipo_de_Gasto': [""], 
+        'Tipo_de_Gasto': ["OPROP"], 
         'Financiera': ["TRANOF"], 
         'Proposito': ["DIS"], 
         'Tesoreria': ["00004000"]
@@ -280,4 +271,3 @@ def get_xml_purcharses(date):
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=True)
-
