@@ -68,7 +68,7 @@ def get_purcharses_server():
             ftp_file.prefetch()
             df = pd.read_csv(ftp_file, sep=",", encoding_errors="ignore")
             df["Orden Compra"] = df["Orden Compra"].astype(str).str.rstrip('.0')
-            df["Ean/Upc"] = df["Ean/Upc"].astype(str).str.rstrip('.0')
+            df["Ean/Upc"] = df["Ean/Upc"].astype(str)
             df["Fecha"] = dic["date"]
             df["Prefijo"] = file.filename[:2]
             #df[~df['Orden Compra'].isin(orders_set)]
