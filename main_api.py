@@ -169,6 +169,7 @@ def login():
     return response
 
 @app.route('/logout', methods=['POST'])
+@jwt_required()
 def logout():
     """Endpoint to logout
     Endpoint para invalidar el token de autentificación
@@ -182,7 +183,7 @@ def logout():
     return resp, 200
 
 @app.route('/get_purcharses_day/<date>', methods=['GET'])
-#@jwt_required()
+@jwt_required()
 def get_purcharses_day(date):
     """
     Endpoint to get all the purchases of a specific date in json format.
@@ -214,7 +215,7 @@ def get_purcharses_day(date):
     return Response(df.to_json(orient="records"), mimetype='application/json')
 
 @app.route('/post_purcharses', methods=['POST'])
-#@jwt_required()
+@jwt_required()
 def post_purcharses():
     """Endpoint to proccess a purchase order as a sales order. The provided Ax_RecId is added to the server files.
     Endpoint para procesar una order de compra como orden de venta. El Ax_RecId dado se registra en los archivos del servidor
@@ -272,7 +273,7 @@ def post_purcharses():
     
 # Endpoint para retornar el XML
 @app.route('/get_xml_purcharses/<date>')
-#@jwt_required()
+@jwt_required()
 def get_xml_purcharses(date):
     """
     Endpoint to get all the specific date unprocessed purchases in xml format.
