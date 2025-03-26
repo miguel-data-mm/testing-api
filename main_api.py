@@ -22,7 +22,7 @@ app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
 app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
 app.config["JWT_ACCESS_COOKIE_NAME"] = "access_token_cookie"
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(minutes=10)
-app.config["JWT_COOKIE_CSRF_PROTECT"] = True
+app.config["JWT_COOKIE_CSRF_PROTECT"] = False
 
 swagger = Swagger(app)
 limiter = Limiter(
