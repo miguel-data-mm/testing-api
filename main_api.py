@@ -315,7 +315,7 @@ def get_xml_purcharses(date):
         df_header = pd.DataFrame({
         'Orden_Compra': [order_number],
         "Cliente": [id_account],
-        'Sitio': ["Vitinico"], 
+        'Sitio': ["Vitivinico"], 
         'Almacen': ["IZTAPALAPA"], 
         'Departamento': ["deo"], 
         'Centro_de_costo': ["VEVEVEVL1"],
