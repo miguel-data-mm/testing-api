@@ -29,7 +29,7 @@ swagger = Swagger(app)
 limiter = Limiter(
     get_remote_address,
     app=app,
-    default_limits=["60 per day", "30 per hour"],
+    default_limits=["120 per day", "60 per hour"],
     storage_uri="memory://",
 )
 
