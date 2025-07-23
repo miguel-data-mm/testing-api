@@ -176,7 +176,7 @@ def logout():
     unset_jwt_cookies(resp)
     return resp, 200
 
-@app.route('/get_purcharses_day', methods=['GET'])
+@app.route('/get_all_purcharses', methods=['GET'])
 @jwt_required()
 def get_purcharses_day():
     """
