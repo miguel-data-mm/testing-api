@@ -234,8 +234,8 @@ def post_purcharses():
       df_items = get_df_sheet("Articulos")
       df_clients = get_df_sheet("Clientes")
       orders=[]
-      date_process = datetime.today().strftime("%d-%m-%Y")
-      time_process = datetime.now().strftime("%H:%M")
+      date_process = datetime.now(ZoneInfo("America/Mexico_City")).strftime("%d-%m-%Y")
+      time_process = datetime.now(ZoneInfo("America/Mexico_City")).strftime("%H:%M")
       sheet_orders = document.worksheet("Processed_Orders")
       sheet_orders_id = set(get_df_sheet("Processed_Orders")["ORDEN_COMPRA"])
       for sale_order in content:
