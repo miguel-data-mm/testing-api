@@ -1,4 +1,5 @@
 from xml.dom import minidom
+from zoneinfo import ZoneInfo
 from flask import Flask, jsonify, Response, make_response, request, send_file
 from datetime import datetime, timedelta, timezone
 import os
@@ -16,13 +17,15 @@ from flask_jwt_extended import (
     get_jwt_identity, set_access_cookies,
     set_refresh_cookies, unset_jwt_cookies
 )
+from snowflake.connector.pandas_tools import write_pandas
+import snowflake.connector
 
 app = Flask(__name__)
 app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
 app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
 app.config["JWT_ACCESS_COOKIE_NAME"] = "access_token_cookie"
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(minutes=10)
-app.config["JWT_COOKIE_CSRF_PROTECT"] = False
+app.config["JWT_COOKIE_CSRF_PROTECT"] = True
 
 swagger = Swagger(app)
 limiter = Limiter(
@@ -51,82 +54,75 @@ document = client.open_by_key(SPREADSHEET_ID)
 
 jwt = JWTManager(app)
 
+def get_df_sheet(sheet_name):
+    sheet = document.worksheet(sheet_name)
+    data = sheet.get_all_values()
+    headers = data.pop(0)   
+    df = pd.DataFrame(data, columns=headers)
+    return df
+
 def get_purcharses_server():   
   try:
-      ssh_conn = paramiko.Transport((hostname, 22))
-      ssh_conn.connect(username=username, password=password)
-      sftp = paramiko.SFTPClient.from_transport(ssh_conn)
+    ssh_conn = paramiko.Transport((hostname, 22))
+    ssh_conn.connect(username=username, password=password)
+    sftp = paramiko.SFTPClient.from_transport(ssh_conn)
 
-      files = sftp.listdir_attr(path)
-      list_df = []
+    files = sftp.listdir_attr(path)
+    list_df = []
 
-      for file in files:
-        date_file = datetime.fromtimestamp(file.st_mtime, tz=timezone.utc).strftime('%d-%m-%Y')
-        if file.filename.lower().endswith("ord_compra.csv"):
-          dic = {"filename": file.filename, "date": date_file}
-          with sftp.open(path + dic["filename"], "r") as ftp_file:
-            ftp_file.prefetch()
-            df = pd.read_csv(ftp_file, sep=",", encoding_errors="ignore")
-            df["Orden Compra"] = df["Orden Compra"].astype(str).str.rstrip('.0')
-            df["Ean/Upc"] = df["Ean/Upc"].astype(str)
-            df["Fecha"] = dic["date"]
-            df["Prefijo"] = file.filename[:2]
-            #df[~df['Orden Compra'].isin(orders_set)]
-            list_df.append(df)
-      sftp.close()
-      ssh_conn.close()
-      
-      full_df = pd.concat(list_df, ignore_index=True)
+    for file in files:
+      date_file = datetime.fromtimestamp(file.st_mtime, tz=ZoneInfo("America/Mexico_City")).strftime('%d-%m-%Y')
+      if file.filename.lower().endswith("ord_compra.csv"):
+        dic = {"filename": file.filename, "date": date_file}
+        with sftp.open(path + dic["filename"], "r") as ftp_file:
+          ftp_file.prefetch()
+          df = pd.read_csv(ftp_file, sep=",", encoding_errors="ignore")
+          df["Orden Compra"] = df["Orden Compra"].astype(str).str.rstrip('.0')
+          df["Ean/Upc"] = df["Ean/Upc"].astype(str) #.str.rstrip('.0')
+          df["Fecha"] = dic["date"]
+          df["Prefijo"] = file.filename[:2] #El prefijo nos sirve para identificar al cliente, ya que algunos csv no se menciona
+          list_df.append(df)
+    sftp.close()
+    ssh_conn.close()
 
-      #Esto es para calcular el total de unidades, ya que las columnas varian entre cadenas
-      full_df.loc[full_df['Prefijo'] == "03", 'Cantidad'] = full_df["Paq X Empaque"] * full_df["Cantidad"]
-      full_df.loc[full_df['Prefijo'] == "22", 'Cantidad'] = full_df["Cantidad"] * full_df["Piezas X Emp"]
-      full_df.loc[full_df['Prefijo'].isin(["04", "05", "09"]), 'Cantidad'] = full_df['Cantidad']
+    full_df = pd.concat(list_df, ignore_index=True)
 
-      full_df.loc[full_df['Prefijo'].isin(["03", "04", "05"]), 'Precio_Unitario'] = full_df['Costo']
-      full_df.loc[full_df['Prefijo'].isin(["09", "22"]), 'Precio_Unitario'] = full_df["Costo Uni"] / full_df["Empaque"]
-      #full_df.loc[full_df['Prefijo'] == "22", 'Precio_Unitario'] = full_df["Costo Uni"] / full_df["Empaque"]
-      #full_df.loc[full_df['Prefijo'].isin(["04", "05"]), 'Precio_Unitario'] = full_df['Costo']
+    full_df["Cantidad"] = full_df["Cantidad"].astype(float)
+    #Esto es para calcular el total de unidades, ya que las columnas varian entre cadenas
+    full_df.loc[full_df['Prefijo'] == "03", 'Cantidad'] = full_df["Paq X Empaque"] * full_df["Cantidad"]
+    full_df.loc[full_df['Prefijo'].isin(["22"]), 'Cantidad'] = full_df["Cantidad"] * full_df["Piezas X Emp"]
+    full_df.loc[full_df['Prefijo'].isin(["04", "05", "09", "40"]), 'Cantidad'] = full_df['Cantidad']
 
-      full_df.rename(columns={"Cadena": "Cliente", "Orden Compra": "Orden_Compra"}, inplace=True)
-      full_df["Ax_RecId"] = pd.NA #Por default, este valor será vacio
+    #Para calcular los costo, se toma el costo de los archivos
+    full_df.loc[full_df['Prefijo'].isin(["03", "04", "05"]), 'Precio_Unitario_Ftp'] = full_df['Costo']
+    full_df.loc[full_df['Prefijo'].isin(["09", "22"]), 'Precio_Unitario_Ftp'] = full_df["Costo Uni"] / full_df["Empaque"]
 
-      sheet = document.worksheet("processed_purcharses")
-      data = sheet.get_all_values()
-      headers = data.pop(0)
 
-      df_processed = pd.DataFrame(data, columns=headers)
-      df_processed["Orden_Compra"] = df_processed["Orden_Compra"].astype(str)
-      df_processed ["Ax_RecId"] = df_processed["Ax_RecId"].astype(str)
+    full_df.rename(columns={"Cadena": "Cliente", "Orden Compra": "Orden_Compra", "Cuenta_Facturacion": "Cliente"}, inplace=True)
+    full_df = full_df[["Orden_Compra","Ean/Upc", "Precio_Unitario_Ftp", "Cliente","Cantidad", "Fecha", "Prefijo"]]
 
-      df = pd.merge(full_df[["Orden_Compra", "Cliente", "Ean/Upc", "Precio_Unitario", "Cantidad", "Fecha", "Prefijo"]], df_processed[["Orden_Compra", "Ax_RecId"]], on='Orden_Compra', how='left')  
-      
-      df["Unidad"] = "PIEZA"
-      df["Tamaño"] = df["Ean/Upc"].apply(lambda x: 0.750 if x != "7501370900226" else 1)
-      df["Grupo de impuestos por venta de articulos"] = "BEB"
+    df_items = get_df_sheet("Articulos")
+    df_clients = get_df_sheet("Clientes")
 
-      df["Orden_Compra"] = df["Orden_Compra"].astype(str).str.rstrip('.0')
-      df["Ean/Upc"] = df["Ean/Upc"].astype(str)
+    full_df["Prefijo_UPC"] = full_df["Prefijo"] + "_" + full_df["Ean/Upc"]
+    full_df = pd.merge(full_df[["Orden_Compra", "Cliente", "Precio_Unitario_Ftp","Ean/Upc", "Cantidad", "Fecha", "Prefijo", "Prefijo_UPC"]], df_items[["UPC", "IEPS", "Tamaño", "Codigo_Axapta", "Precio_Unitario", "Prefijo_UPC", "Estilo", "Botellas_Caja"]], on="Prefijo_UPC", how='left') 
+    full_df["Botellas_Caja"] = full_df["Botellas_Caja"].astype(float)
+    full_df.loc[full_df['Prefijo'].isin(["40"]), 'Cantidad'] = full_df['Cantidad'] * full_df["Botellas_Caja"]
+    full_df = full_df[["Orden_Compra", "Cliente", "Ean/Upc", "Precio_Unitario_Ftp", "Cantidad", "Fecha", "Prefijo", "Tamaño", "Codigo_Axapta", "IEPS", "Precio_Unitario", "Estilo", "Ean/Upc"]]
+    full_df.loc[(full_df["Precio_Unitario_Ftp"] !=  full_df["Precio_Unitario"]) & (full_df["Precio_Unitario_Ftp"].notna()), 'Precio_Unitario'] = full_df["Precio_Unitario_Ftp"] 
 
-      sheet = document.worksheet("prices")
-      data = sheet.get_all_values()
-      headers = data.pop(0)
+    full_df = pd.merge(full_df, df_clients[["Cuenta_Facturacion", "Pre_Masteredi"]], left_on='Prefijo', right_on='Pre_Masteredi', how='left') 
+    full_df["Precio_Unitario_Ftp"] = round(full_df["Precio_Unitario"], 2)
+    full_df.rename(columns={"Cuenta_Facturacion": "Cliente"}) 
+    full_df = full_df[["Orden_Compra", "Cliente", "Codigo_Axapta","Cantidad", "Precio_Unitario", "Tamaño", "Fecha", "IEPS", "Estilo", "Prefijo"]]
 
-      base = pd.DataFrame(data, columns=headers)
-      #base.rename(columns={"AXAPTA": "Articulo", "Costo Unitario 2024":"Precio Unitario"}, inplace=True)
-      base["Cliente_UPC"] = base["Prefijo"].astype(str) + base["UPC"].astype(str)
-      df["Cliente_UPC"] = df["Prefijo"] + df["Ean/Upc"]
-            
-      df_result = pd.merge(df, base[['Cliente_UPC', "Precio Unitario","IEPS", "Articulo"]], on='Cliente_UPC', how='left')
-      #df_result['IEPS'] = df_result['IEPS'].astype(int)
-      df_result["Grupo de impuestos sobre las ventas"] = "IEPS" + (df_result['IEPS']).astype(str)
-      df_result["Precio Unitario"] = round(df_result["Precio Unitario"], ndigits=2)
-
-      df_result = df_result.loc[:, ['Orden_Compra', 'Cliente', 'Articulo', 'Cantidad', 'Unidad', "Precio Unitario", 'Tamaño', 'Grupo de impuestos sobre las ventas', 'Grupo de impuestos por venta de articulos', "Prefijo", "Fecha", "Ax_RecId"]]
-      df_result.columns = df_result.columns.str.replace(' ', '_')
-      return df_result
+    sheet_orders = get_df_sheet("Processed_Orders")
+    processed_orders = set(sheet_orders["ORDEN_COMPRA"])
+    full_df =  full_df[~full_df["Orden_Compra"].isin(processed_orders)]
+    return full_df
   except Exception as e:
     return e
+
 
 def last_filled_row(worksheet):
     str_list = list(filter(None, worksheet.col_values(1)))
@@ -182,19 +178,13 @@ def logout():
     unset_jwt_cookies(resp)
     return resp, 200
 
-@app.route('/get_purcharses_day/<date>', methods=['GET'])
+@app.route('/get_purcharses_day', methods=['GET'])
 @jwt_required()
-def get_purcharses_day(date):
+def get_purcharses_day():
     """
     Endpoint to get all the purchases of a specific date in json format.
-    Endpoint para obtener las ordenes de compra de un día específico aún no procesadas (sin Ax_RecId) en formato json.
-    date format: year-month-day
+    Endpoint para obtener las ordenes de compra del servidor de Masteredi. Son todas las ordenes sin importar si ya han sido procesadas o no.
     ---
-    parameters:
-      - name: date
-        in: path
-        type: string
-        required: true
     responses:
       200:
         description: A list of purcharses from a specific date
@@ -208,10 +198,6 @@ def get_purcharses_day(date):
         description: All the purcharses
     """
     df = get_purcharses_server()
-    df = df[(df['Fecha'] == date)]
-    df = df[df['Ax_RecId'].isna()]
-    df = df.drop(['Ax_RecId'], axis=1)
-
     return Response(df.to_json(orient="records"), mimetype='application/json')
 
 @app.route('/post_purcharses', methods=['POST'])
@@ -231,12 +217,12 @@ def post_purcharses():
             type: object
             required:
               - Orden_Compra
-              - Ax_RecId
+              - Orden_ID_Axapta
             properties:
               Orden_Compra:
                 type: string
                 default: "UNIQUE_VALUE"
-              Ax_RecId:
+              Orden_ID_Axapta:
                 type: string
                 default: "1"
     responses:
@@ -246,31 +232,55 @@ def post_purcharses():
 
     try:
       content = request.get_json()
-      #df = get_purcharses_server()
       df = get_purcharses_server()
-      orders = []
+      df_items = get_df_sheet("Articulos")
+      df_clients = get_df_sheet("Clientes")
+      orders=[]
       date_process = datetime.today().strftime("%d-%m-%Y")
       time_process = datetime.now().strftime("%H:%M")
-      for sale_order in content:
-        elem = [sale_order["Orden_Compra"], sale_order['Ax_RecId'], date_process, time_process]
-        orders.append(elem)
-
-      sheet_processed = document.worksheet("processed_purcharses")
-      sheet_processed.append_rows(orders)
-
-      sheet = document.worksheet("processed_purcharses_details")
+      sheet_orders = document.worksheet("Processed_Orders")
+      sheet_orders_id = set(get_df_sheet("Processed_Orders")["ORDEN_COMPRA"])
       for sale_order in content:
         id_order = sale_order["Orden_Compra"]
-        df_filtered = df[(df['Orden_Compra'] == id_order)]
-        df_filtered["Ax_RecId"] = sale_order['Ax_RecId']
-        df_filtered["Fecha"] = date_process
-        df_filtered = df_filtered[["Orden_Compra", "Cliente", "Articulo", "Cantidad", "Fecha", "Ax_RecId"]]
-        sheet.append_rows(df_filtered.values.tolist())
+        if id_order not in sheet_orders_id:
+          df_filtered = df[(df['Orden_Compra'] == id_order)]
+          prefix =  df_filtered["Prefijo"].values[0]
+          if not df_filtered.empty:
+            items_orden = set(df_filtered["Codigo_Axapta"])
+            order_details =[]
+            for axapta_item in items_orden:
+                row = df_items[(df_items["Prefijo"] == prefix) & ((df_items["Codigo_Axapta"] == axapta_item))]
+                if row.empty == False:
+                    description = row["Descripcion"].values[0]
+                    upc = row["UPC"].values[0]
+                    quantity = df_filtered[df_filtered["Codigo_Axapta"] == axapta_item]["Cantidad"].values[0]
+                    unit_price = row["Precio_Unitario"].values[0]
+                else:
+                    description, upc, quantity, unit_price  = None, None, None, None
+                elem = {"Articulo_Axapta": axapta_item, "Descripcion": description, "UPC": upc, "Cantidad": str(quantity), "Precio_Unitario": unit_price}
+                order_details.append(elem)
+            orders.append({"Orden_Compra": sale_order["Orden_Compra"], "Prefijo": prefix, 'Orden_ID_Axapta': sale_order['Orden_ID_Axapta'], "Fecha": date_process, "Hora": time_process, "Detalles_Orden": str(order_details)})
+          else:
+              pass
+        else:
+          print(f"Order: {id_order} is already in the processed orders list")
 
-      return "Success"
+      df_orders = pd.DataFrame(orders)
+      if not df_orders.empty:
+        df_orders = df_orders.merge(df_clients, how="left", left_on="Prefijo", right_on="Pre_Masteredi")
+        df_orders = df_orders[['Orden_Compra', 'Orden_ID_Axapta', 'Nombre_Comercial_Cliente', 'Fecha', 'Hora',
+            'Detalles_Orden']]
+        df_orders.columns = [e.upper() for e in df_orders]
+        df_orders["FECHA"] = pd.to_datetime(df_orders["FECHA"], format="%d-%m-%Y")
+        df_orders["FECHA"] = df_orders["FECHA"].dt.strftime('%Y-%m-%d')
+        sheet_orders.append_rows(df_orders.values.tolist())
+        return "The orders were updated in the database"
+      else:
+          return "The order is already in the database"
     except Exception as e:
       return "Error " + str(e)
     
+
 # Endpoint para retornar el XML
 @app.route('/get_xml_purcharses/<date>')
 @jwt_required()
@@ -291,10 +301,8 @@ def get_xml_purcharses(date):
     """
     df = get_purcharses_server()
     df = df[(df['Fecha'] == date)]
-    df = df[df['Ax_RecId'].isna()]
 
-    df = df.drop(['Fecha', 'Ax_RecId'], axis=1)
-
+    df = df.drop(['Fecha'], axis=1)
     orders_tag = ET.Element("Ordenes")
     orders_numbers = set(df["Orden_Compra"])
 
@@ -303,14 +311,14 @@ def get_xml_purcharses(date):
 
         list_ord = df.query(f"Orden_Compra == '{order_number}'")
         try:
-          prefix_client = list_ord["Prefijo"].iloc[0]
-          sheet_accounts = document.worksheet("accounts")
-          data = sheet_accounts.get_all_values()
-          headers = data.pop(0)
-          df_accounts = pd.DataFrame(data, columns=headers)
-          id_account = str(df_accounts.query(f"Prefijo == '{prefix_client}'")["Cuenta"].iloc[0])
+            prefix_client = list_ord["Prefijo"].iloc[0]
+            sheet_accounts = document.worksheet("Clientes")
+            data = sheet_accounts.get_all_values()
+            headers = data.pop(0)
+            df_accounts = pd.DataFrame(data, columns=headers)
+            id_account = str(df_accounts.query(f"Pre_Masteredi == '{prefix_client}'")["Cuenta_Facturacion"].iloc[0])
         except:
-          id_account = "Error"
+            id_account = "Not found"
 
         df_header = pd.DataFrame({
         'Orden_Compra': [order_number],
@@ -323,7 +331,8 @@ def get_xml_purcharses(date):
         'Tipo_de_Gasto': ["OPROP"], 
         'Financiera': ["TRANOF"], 
         'Proposito': ["DIS"], 
-        'Tesoreria': ["00004000"]
+        'Tesoreria': ["00004000"],
+        'Empresa_Id': ["deo"]
         })
 
         root_df_header = ET.fromstring(df_header.to_xml(index=False))
@@ -334,7 +343,11 @@ def get_xml_purcharses(date):
                 child_element.text = child.text
 
         concepts_tag= ET.SubElement(header_tag, "Conceptos")
-        list_ord = list_ord.drop(['Orden_Compra','Cliente'], axis=1)
+        list_ord = list_ord.drop(['Orden_Compra','Cliente', 'Prefijo'], axis=1)
+
+        list_ord = list_ord.rename(columns = {"IEPS": "Grupo_de_impuestos_sobre_las_ventas"})
+        list_ord["Unidad"] = "PIEZA"
+        list_ord["Grupo_de_impuestos_por_venta_de_articulos"] = "BEB"
 
         root_df_concepts = ET.fromstring(list_ord.to_xml(index=False))
 
@@ -349,5 +362,38 @@ def get_xml_purcharses(date):
     # Retornar el XML con el tipo MIME adecuado
     return Response(xml_str_formatted, mimetype='application/xml', status=200)
 
+
+@app.route('/delete_processed_purcharses', methods=["delete"])
+@jwt_required()
+def delete_processed_purcharses():
+  """
+  Endpoint to get all the processed purchases.
+  ---
+  responses:
+    200:
+      description: All the purcharses
+  """
+  sheet_orders = document.worksheet("Processed_Orders")
+  sheet_orders.delete_rows(start_index=2, end_index=last_filled_row(sheet_orders))
+  return "Sucess"
+
+
+@app.route('/get_all_processed_purcharses')
+@jwt_required()
+def get_all_processed_purcharses():
+  """
+  Endpoint to get all the specific date unprocessed purchases in json format.
+  ---
+  responses:
+    200:
+      description: All the purcharses
+  """
+  sheet_orders = get_df_sheet("Processed_Orders")
+  if sheet_orders.empty:
+    return "There is no processed orders"
+  else:
+    return Response(sheet_orders.to_json(orient="records"), mimetype='application/json')
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=True)
+
