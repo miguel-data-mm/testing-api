@@ -59,6 +59,9 @@ def get_df_sheet(sheet_name):
     df = pd.DataFrame(data, columns=headers)
     return df
 
+def check_column_df(df, column_name):
+  return True if column_name in df.columns else False
+
 def get_purcharses_server():   
   try:
     ssh_conn = paramiko.Transport((hostname, 22))
@@ -87,14 +90,18 @@ def get_purcharses_server():
 
     full_df["Cantidad"] = full_df["Cantidad"].astype(float)
     #Esto es para calcular el total de unidades, ya que las columnas varian entre cadenas
-    full_df.loc[full_df['Prefijo'] == "03", 'Cantidad'] = full_df["Paq X Empaque"] * full_df["Cantidad"]
-    full_df.loc[full_df['Prefijo'].isin(["22"]), 'Cantidad'] = full_df["Cantidad"] * full_df["Piezas X Emp"]
+    if check_column_df(full_df, "Paq X Empaque"):
+    #Esto es para calcular el total de unidades, ya que las columnas varian entre cadenas
+      full_df.loc[full_df['Prefijo'] == "03", 'Cantidad'] = full_df["Paq X Empaque"] * full_df["Cantidad"]
+    if check_column_df(full_df, "Piezas X Emp"):
+      full_df.loc[full_df['Prefijo'].isin(["22"]), 'Cantidad'] = full_df["Cantidad"] * full_df["Piezas X Emp"]
     full_df.loc[full_df['Prefijo'].isin(["04", "05", "09", "40"]), 'Cantidad'] = full_df['Cantidad']
 
     #Para calcular los costo, se toma el costo de los archivos
-    full_df.loc[full_df['Prefijo'].isin(["03", "04", "05"]), 'Precio_Unitario_Ftp'] = full_df['Costo']
-    full_df.loc[full_df['Prefijo'].isin(["09", "22"]), 'Precio_Unitario_Ftp'] = full_df["Costo Uni"] / full_df["Empaque"]
-
+    if check_column_df(full_df, "Costo"):
+      full_df.loc[full_df['Prefijo'].isin(["03", "04", "05"]), 'Precio_Unitario_Ftp'] = full_df['Costo']
+    if check_column_df(full_df, "Costo Uni") and check_column_df(full_df, "Empaque"):
+      full_df.loc[full_df['Prefijo'].isin(["09", "22"]), 'Precio_Unitario_Ftp'] = full_df["Costo Uni"] / full_df["Empaque"]
 
     full_df.rename(columns={"Cadena": "Cliente", "Orden Compra": "Orden_Compra", "Cuenta_Facturacion": "Cliente"}, inplace=True)
     full_df = full_df[["Orden_Compra","Ean/Upc", "Precio_Unitario_Ftp", "Cliente","Cantidad", "Fecha", "Prefijo"]]
@@ -394,4 +401,5 @@ def get_all_processed_purcharses():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=True)
+
 
