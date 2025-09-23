@@ -308,6 +308,11 @@ def get_xml_purcharses(date):
     df = df[(df['Fecha'] == date)]
 
     df = df.drop(['Fecha'], axis=1)
+
+    sheet_sales_manager = get_df_sheet("Responsables_Ventas")
+    sheet_sales_manager = sheet_sales_manager[["Cuenta Facturacion", "Responsable de Ventas", "Pago", "Zona de Ventas", "Forma de Pago"]]
+    sheet_sales_manager.columns = sheet_sales_manager.columns.str.replace(' ', '_')
+    
     orders_tag = ET.Element("Ordenes")
     orders_numbers = set(df["Orden_Compra"])
 
@@ -339,6 +344,28 @@ def get_xml_purcharses(date):
         'Tesoreria': ["00004000"],
         'Empresa_Id': ["deo"]
         })
+
+        df_header = df_header.merge(sheet_sales_manager, how="left", left_on="Cliente", right_on="Cuenta_Facturacion")
+        df_header = df_header[[
+        'Orden_Compra',
+        "Cliente",
+        'Sitio',
+        'Almacen',
+        'Departamento',
+        'Centro_de_costo',
+        'Reporte',
+        'Tipo_de_Gasto',
+        'Financiera',
+        'Proposito',
+        'Tesoreria',
+        'Empresa_Id', 
+        "Cuenta_Facturacion", 
+        "Responsable_de_Ventas", 
+        "Pago", "Zona_de_Ventas", 
+        "Forma_de_Pago"]]
+
+        df_header = df_header.drop("Cuenta_Facturacion", axis=1)
+        df_header["Tipo_Gasto"] = ""
 
         root_df_header = ET.fromstring(df_header.to_xml(index=False))
         for row in root_df_header:
@@ -401,5 +428,6 @@ def get_all_processed_purcharses():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=True)
+
 
 
