@@ -344,7 +344,7 @@ def post_purcharses():
         lista_destinatarios = [email.strip() for email in RECEIVER_EMAIL.split(',')]
         msg['To'] = ', '.join(lista_destinatarios)  # Para el encabezado del correo
             
-        msg.attach(MIMEText(f'Buenas tardes, se adjunta sheet con ordenes procesadas a {today}: https://docs.google.com/spreadsheets/d/1VA2jJgA_xLJLDFrsY_3mhylXrvRHhJ2019dBouBO8_U/edit?usp=sharing', 'plain'))
+        msg.attach(MIMEText(f'Buenas tardes, se adjunta sheet con ordenes procesadas a {today}', 'plain'))
         """excel_attachment = MIMEApplication(buffer.read())
         excel_attachment.add_header('Content-Disposition', 'attachment', filename=f'reporte_masteredi_{today}.xlsx')
         msg.attach(excel_attachment)"""
@@ -506,6 +506,7 @@ def get_all_processed_purcharses():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=True)
+
 
 
 
