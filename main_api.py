@@ -17,6 +17,14 @@ from flask_jwt_extended import (
     get_jwt_identity, set_access_cookies,
     set_refresh_cookies, unset_jwt_cookies
 )
+from email.mime.application import MIMEApplication
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from io import BytesIO
+import smtplib
+from datetime import date
+import ssl
+
 
 app = Flask(__name__)
 app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
@@ -45,6 +53,12 @@ password = os.getenv('PASSWORD_FTP')
 path = os.getenv('PATH_FTP')
 SCOPES = [os.getenv('SCOPES')]
 SPREADSHEET_ID = os.getenv('SPREADSHEET_ID')
+
+SENDER_EMAIL = os.getenv('SENDER_EMAIL')
+PASSWORD_EMAIL = os.getenv('PASSWORD_EMAIL')
+RECEIVER_EMAIL = os.getenv('RECEIVER_EMAIL')
+SMTP_SERVER = os.getenv('SMTP_SERVER', 'smtp.gmail.com')
+SMTP_PORT = int(os.getenv('SMTP_PORT', 465))
 
 credent = service_account.Credentials.from_service_account_file(filename="credentials.json", scopes=SCOPES)
 client = gspread.authorize(credent)
@@ -132,6 +146,36 @@ def get_purcharses_server():
 def last_filled_row(worksheet):
     str_list = list(filter(None, worksheet.col_values(1)))
     return len(str_list)
+
+
+def get_df_orders_details(df_orders): 
+    #df_orders = get_df_sheet("Processed_Orders")
+    df = pd.DataFrame(columns=['Articulo_Axapta', 'Descripcion', 'UPC', 'Cantidad', 'Precio_Unitario'])
+    import ast
+    sheet_sales_manager = get_df_sheet("Responsables_Ventas")
+
+    df_orders = df_orders.merge(sheet_sales_manager, on="NOMBRE_COMERCIAL_CLIENTE", how="left")
+
+    orders = list(df_orders["ORDEN_COMPRA"])
+    for order_id in orders: 
+        df_row = df_orders[df_orders["ORDEN_COMPRA"] == order_id]
+        df_row = df_row["DETALLES_ORDEN"].values[0]
+        order = df_row.replace('nan', 'None')
+        list_of_dicts = ast.literal_eval(order)
+        df_temp = pd.DataFrame(list_of_dicts)
+        df_temp["ORDEN_COMPRA"] =order_id
+        df = pd.concat([df, df_temp], ignore_index=True)
+        
+        df = df[['ORDEN_COMPRA', 'Articulo_Axapta', 'Descripcion', 'UPC', 'Cantidad', 'Precio_Unitario']]
+
+    df_details = df.merge(df_orders, how="left", on="ORDEN_COMPRA")
+    df_details = df_details[['ORDEN_COMPRA', 'ORDEN_ID_AXAPTA', 'NOMBRE_COMERCIAL_CLIENTE',
+        'FECHA', 'HORA', 'Articulo_Axapta', 'Descripcion', 'UPC', 'Cantidad',
+        'Precio_Unitario', "Responsable de Ventas"]]
+
+    df_details.columns = df_details.columns.str.upper()
+    df_details = df_details.fillna("N/A")
+    return df_details
 
 @app.route("/login", methods=["POST"])
 def login():
@@ -279,6 +323,40 @@ def post_purcharses():
         df_orders["FECHA"] = pd.to_datetime(df_orders["FECHA"], format="%d-%m-%Y")
         df_orders["FECHA"] = df_orders["FECHA"].dt.strftime('%Y-%m-%d')
         sheet_orders.append_rows(df_orders.values.tolist())
+
+        df_details_orders = get_df_orders_details(df_orders)
+
+        sheet_orders_details_sheet = document.worksheet("Processed_Details")
+        sheet_orders_details_sheet.append_rows(df_details_orders.values.tolist())
+        
+        details_df_email = get_df_sheet("Processed_Details")
+        today = date.today()
+
+        buffer = BytesIO()
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            details_df_email.to_excel(writer, sheet_name='Datos', index=False)
+        buffer.seek(0)  # Volver al inicio del buffer
+
+        msg = MIMEMultipart()
+        msg['From'] = SENDER_EMAIL
+        msg['Subject'] = f"Ordenes procesadas Masteredi - Axapta {today}"
+
+        lista_destinatarios = [email.strip() for email in RECEIVER_EMAIL.split(',')]
+        msg['To'] = ', '.join(lista_destinatarios)  # Para el encabezado del correo
+            
+        msg.attach(MIMEText(f'Buenas tardes, se adjunta excel con ordenes procesadas a {today}', 'plain'))
+        excel_attachment = MIMEApplication(buffer.read())
+        excel_attachment.add_header('Content-Disposition', 'attachment', filename=f'reporte_masteredi_{today}.xlsx')
+        msg.attach(excel_attachment)
+
+        context_ssl = ssl.create_default_context()
+        try:
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context_ssl) as smtp:
+                smtp.login(SENDER_EMAIL, PASSWORD_EMAIL)
+                smtp.sendmail(SENDER_EMAIL, lista_destinatarios, msg.as_string())
+                print("email sent")
+        except Exception as e:
+            print(f"Email not send: {e}")
         return "The orders were updated in the database"
       else:
           return "The order is already in the database"
@@ -428,6 +506,7 @@ def get_all_processed_purcharses():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=True)
+
 
 
 
