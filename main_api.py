@@ -328,14 +328,15 @@ def post_purcharses():
 
         sheet_orders_details_sheet = document.worksheet("Processed_Details")
         sheet_orders_details_sheet.append_rows(df_details_orders.values.tolist())
-        
+
+        """
         details_df_email = get_df_sheet("Processed_Details")
         today = date.today()
 
-        """buffer = BytesIO()
+        buffer = BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             details_df_email.to_excel(writer, sheet_name='Datos', index=False)
-        buffer.seek(0)  # Volver al inicio del buffer"""
+        buffer.seek(0)  # Volver al inicio del buffer
 
         msg = MIMEMultipart()
         msg['From'] = SENDER_EMAIL
@@ -345,9 +346,9 @@ def post_purcharses():
         msg['To'] = ', '.join(lista_destinatarios)  # Para el encabezado del correo
             
         msg.attach(MIMEText(f'Buenas tardes, se adjunta sheet con ordenes procesadas a {today}', 'plain'))
-        """excel_attachment = MIMEApplication(buffer.read())
+        excel_attachment = MIMEApplication(buffer.read())
         excel_attachment.add_header('Content-Disposition', 'attachment', filename=f'reporte_masteredi_{today}.xlsx')
-        msg.attach(excel_attachment)"""
+        msg.attach(excel_attachment)
 
         context_ssl = ssl.create_default_context()
         try:
@@ -356,7 +357,7 @@ def post_purcharses():
                 smtp.sendmail(SENDER_EMAIL, lista_destinatarios, msg.as_string())
                 print("email sent")
         except Exception as e:
-            print(f"Email not send: {e}")
+            print(f"Email not send: {e}")"""
         return "The orders were updated in the database"
       else:
           return "The order is already in the database"
@@ -506,6 +507,7 @@ def get_all_processed_purcharses():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=True)
+
 
 
 
